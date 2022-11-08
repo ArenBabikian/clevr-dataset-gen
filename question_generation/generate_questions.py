@@ -109,6 +109,9 @@ def precompute_filter_options(scene_struct, metadata):
       mask.append((i // (2 ** j)) % 2)
     masks.append(mask)
 
+  # LEGACY
+  masks=[(1,1,0,0)]
+
   for object_idx, obj in enumerate(scene_struct['objects']):
     if metadata['dataset'] == 'CLEVR-v1.0':
       keys = [tuple(obj[k] for k in attr_keys)]
@@ -126,6 +129,8 @@ def precompute_filter_options(scene_struct, metadata):
           attribute_map[masked_key] = set()
         attribute_map[masked_key].add(object_idx)
 
+  # print(attribute_map)
+
   scene_struct['_filter_options'] = attribute_map
 
 
@@ -142,6 +147,24 @@ def find_filter_options(object_idxs, scene_struct, metadata):
     attribute_map[k] = sorted(list(object_idxs & vs))
   return attribute_map
 
+def add_all_filter_option(attribute_map, metadata):
+  # Add some filtering criterion that do NOT correspond to objects
+
+  if metadata['dataset'] == 'CLEVR-v1.0':
+    attr_keys = ['Size', 'Color', 'Material', 'Shape']
+  else:
+    assert False, 'Unrecognized dataset'
+
+  attr_vals = [metadata['types'][t] for t in attr_keys]
+
+  # TODO HARD-CODED FOR NOW
+  # SIZE
+  for d1 in range(len(attr_vals[0])):
+    # COLOR
+    for d2 in range(len(attr_vals[1])):
+      k = (attr_vals[0][d1], attr_vals[1][d2], None, None)
+      if k not in attribute_map:
+        attribute_map[k] = []
 
 def add_empty_filter_options(attribute_map, metadata, num_to_add):
   # Add some filtering criterion that do NOT correspond to objects
@@ -190,7 +213,20 @@ def find_relate_filter_options(object_idx, scene_struct, metadata,
   random.shuffle(trivial_options)
   for k, v in trivial_options[:num_trivial]:
     options[k] = v
+  return options
 
+def find_all_relate_filter_options(object_idx, scene_struct, metadata):
+  options = {}
+  if '_filter_options' not in scene_struct:
+    precompute_filter_options(scene_struct, metadata)
+  # print(scene_struct["_filter_options"])
+
+  for o, oid_set in scene_struct["_filter_options"].items():
+    for r in metadata["types"]['Relation']:
+      assert len(oid_set) == 1
+      oid = list(oid_set)[0]
+      if oid != object_idx:
+        options[(r, o)] = []
   return options
 
 
@@ -239,6 +275,7 @@ def other_heuristic(text, param_vals):
   return text
 
 
+# START GETTING QUESTION
 def instantiate_templates_dfs(scene_struct, template, metadata, answer_counts,
                               synonyms, max_instances=None, verbose=False):
 
@@ -259,6 +296,7 @@ def instantiate_templates_dfs(scene_struct, template, metadata, answer_counts,
     q = {'nodes': state['nodes']}
     outputs = qeng.answer_question(q, metadata, scene_struct, all_outputs=True)
     answer = outputs[-1]
+    # The answer above is the outcome of the "state" node
     if answer == '__INVALID__': continue
 
     # Check to make sure constraints are satisfied for the current state
@@ -310,18 +348,21 @@ def instantiate_templates_dfs(scene_struct, template, metadata, answer_counts,
     # processed all the nodes in the template then the current state is a valid
     # question, so add it if it passes our rejection sampling tests.
     if state['next_template_node'] == len(template['nodes']):
+      # ### We want to have a more complete question gen approach
+      # ### Thus, we avoid rejection sampling
       # Use our rejection sampling heuristics to decide whether we should
       # keep this template instantiation
-      cur_answer_count = answer_counts[answer]
-      answer_counts_sorted = sorted(answer_counts.values())
-      median_count = answer_counts_sorted[len(answer_counts_sorted) // 2]
-      median_count = max(median_count, 5)
-      if cur_answer_count > 1.1 * answer_counts_sorted[-2]:
-        if verbose: print('skipping due to second count')
-        continue
-      if cur_answer_count > 5.0 * median_count:
-        if verbose: print('skipping due to median')
-        continue
+      # cur_answer_count = answer_counts[answer]
+      # answer_counts_sorted = sorted(answer_counts.values())
+      # median_count = answer_counts_sorted[len(answer_counts_sorted) // 2]
+      # median_count = max(median_count, 5)
+      
+      # if cur_answer_count > 1.1 * answer_counts_sorted[-2]:
+      #   if verbose: print('skipping due to second count')
+      #   continue
+      # if cur_answer_count > 5.0 * median_count:
+      #   if verbose: print('skipping due to median')
+      #   continue
 
       # If the template contains a raw relate node then we need to check for
       # degeneracy at the end
@@ -354,29 +395,39 @@ def instantiate_templates_dfs(scene_struct, template, metadata, answer_counts,
         unique = (next_node['type'] == 'relate_filter_unique')
         include_zero = (next_node['type'] == 'relate_filter_count'
                         or next_node['type'] == 'relate_filter_exist')
-        filter_options = find_relate_filter_options(answer, scene_struct, metadata,
-                            unique=unique, include_zero=include_zero)
-      else:
-        filter_options = find_filter_options(answer, scene_struct, metadata)
-        if next_node['type'] == 'filter':
-          # Remove null filter
-          filter_options.pop((None, None, None, None), None)
-        if next_node['type'] == 'filter_unique':
-          # Get rid of all filter options that don't result in a single object
-          filter_options = {k: v for k, v in filter_options.items()
-                            if len(v) == 1}
+        if template["category"] == "relation":
+          filter_options = find_all_relate_filter_options(answer, scene_struct, metadata,
+                              unique=unique, include_zero=include_zero)
         else:
-          # Add some filter options that do NOT correspond to the scene
-          if next_node['type'] == 'filter_exist':
-            # For filter_exist we want an equal number that do and don't
-            num_to_add = len(filter_options)
-          elif next_node['type'] == 'filter_count' or next_node['type'] == 'filter':
-            # For filter_count add nulls equal to the number of singletons
-            num_to_add = sum(1 for k, v in filter_options.items() if len(v) == 1)
-          add_empty_filter_options(filter_options, metadata, num_to_add)
+          filter_options = find_relate_filter_options(answer, scene_struct, metadata,
+                              unique=unique, include_zero=include_zero)
+      else:
+        # OBJECT FILTER
+        if template["category"] == "object":
+          filter_options = {}
+          add_all_filter_option(filter_options, metadata)
+        else:
+          filter_options = find_filter_options(answer, scene_struct, metadata)
+          if next_node['type'] == 'filter':
+            # Remove null filter
+            filter_options.pop((None, None, None, None), None)
+          if next_node['type'] == 'filter_unique':
+            # Get rid of all filter options that don't result in a single object
+            filter_options = {k: v for k, v in filter_options.items()
+                              if len(v) == 1}
+          else:
+            # Add some filter options that do NOT correspond to the scene
+            if next_node['type'] == 'filter_exist':
+              # For filter_exist we want an equal number that do and don't
+              num_to_add = len(filter_options)
+            elif next_node['type'] == 'filter_count' or next_node['type'] == 'filter':
+              # For filter_count add nulls equal to the number of singletons
+              num_to_add = sum(1 for k, v in filter_options.items() if len(v) == 1)
+            add_empty_filter_options(filter_options, metadata, num_to_add)
 
       filter_option_keys = list(filter_options.keys())
-      random.shuffle(filter_option_keys)
+      # Temporarily avoid random order for reproductibility
+      # random.shuffle(filter_option_keys)
       for k in filter_option_keys:
         new_nodes = []
         cur_next_vals = {k: v for k, v in state['vals'].items()}
@@ -495,6 +546,7 @@ def instantiate_templates_dfs(scene_struct, template, metadata, answer_counts,
     text_questions.append(text)
 
   return text_questions, structured_questions, answers
+# END QUESTION GETTING
 
 
 
@@ -599,6 +651,7 @@ def main(args):
 
   questions = []
   scene_count = 0
+  tot_qs=0
   for i, scene in enumerate(all_scenes):
     scene_fn = scene['image_filename']
     scene_struct = scene
@@ -622,14 +675,23 @@ def main(args):
         print('trying template ', fn, idx)
       if args.time_dfs and args.verbose:
         tic = time.time()
+      # HERE WE GET THE QUESTION
+      num_obj = len(scene['objects'])
+      if template["category"] == "object":
+        # if "Relation" not in {p['type'] for p in template['params']}:
+        num_qs = 16 # = {8 colors} * {2 sizes}
+      else:
+        num_qs = num_obj * (num_obj-1) * 4 # = {num_node_pairs} * {4 edge types}
+      tot_qs+=num_qs
+
       ts, qs, ans = instantiate_templates_dfs(
                       scene_struct,
                       template,
                       metadata,
                       template_answer_counts[(fn, idx)],
                       synonyms,
-                      max_instances=args.instances_per_template,
-                      verbose=False)
+                      max_instances=num_qs,
+                      verbose=args.verbose)
       if args.time_dfs and args.verbose:
         toc = time.time()
         print('that took ', toc - tic)
@@ -677,8 +739,12 @@ def main(args):
       else:
         f['value_inputs'] = []
 
+  # questions = [(q['question'], q['answer']) for q in questions]
+  # questions = [q['question'] for q in questions]
+
+  print(f'>>> {tot_qs} question for {len(all_scenes)} scenes')
   with open(args.output_questions_file, 'w') as f:
-    print('Writing output to %s' % args.output_questions_file)
+    print('>>> Writing output to %s \n' % args.output_questions_file)
     json.dump({
         'info': scene_info,
         'questions': questions,
