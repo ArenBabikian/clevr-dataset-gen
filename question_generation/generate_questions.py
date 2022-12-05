@@ -582,6 +582,9 @@ def replace_optionals(s):
 
 
 def main(args):
+  
+  answer_processing = {"True":"yes", "False":"no"}
+
   with open(args.metadata_file, 'r') as f:
     metadata = json.load(f)
     dataset = metadata['dataset']
@@ -696,7 +699,10 @@ def main(args):
         toc = time.time()
         print('that took ', toc - tic)
       image_index = int(os.path.splitext(scene_fn)[0].split('_')[-1])
-      for t, q, a in zip(ts, qs, ans):
+      for t, q, raw_a in zip(ts, qs, ans):
+        a_processed = str(raw_a)
+        if a_processed in answer_processing:
+          a_processed = answer_processing[a_processed]
         questions.append({
           'split': scene_info['split'],
           'image_filename': scene_fn,
@@ -704,7 +710,7 @@ def main(args):
           'image': os.path.splitext(scene_fn)[0],
           'question': t,
           'program': q,
-          'answer': a,
+          'answer': a_processed,
           'template_filename': fn,
           'question_family_index': idx,
           'question_index': len(questions),
@@ -748,7 +754,7 @@ def main(args):
     json.dump({
         'info': scene_info,
         'questions': questions,
-      }, f)
+      }, f, indent=2)
 
 
 if __name__ == '__main__':

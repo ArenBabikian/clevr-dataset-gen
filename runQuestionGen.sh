@@ -2,7 +2,7 @@ ROOT='question_generation'
 TEST=""
 SUFFIXES="rel obj-ex obj-cnt"
 SUFFIXES="rel"
-SUFFIXES="obj-ex ibj-cnt"
+SUFFIXES="obj-ex obj-cnt"
 for SUFFIX in ${SUFFIXES}
 do
   python $ROOT/generate_questions.py \
