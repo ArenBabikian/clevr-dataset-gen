@@ -62,6 +62,14 @@ parser.add_argument('--shape_color_combos_json', default=None,
                     help="Optional path to a JSON file mapping shape names to a list of " +
                          "allowed color names for that shape. This allows rendering images " +
                          "for CLEVR-CoGenT.")
+parser.add_argument('--render_from_graph', default=0, type=int,
+                    help="Setting --render_from_graph 1 enables generating a scene that satisfies" +
+                         "the positional constraints between obects in the image defined in a scene" +
+                         "graph given as input through the --graph_src_path argument. Otherwise, the" + 
+                         "objects are placed randomly and a scene graph is derived afterwards.")
+parser.add_argument('--graph_src_path', default=None,
+                    help="File that defines the cene graph to be concretized")
+
 
 # Settings for objects
 parser.add_argument('--min_objects', default=3, type=int,
@@ -263,7 +271,11 @@ def render_scene(args,
     }
 
     # Put a plane on the ground so we can compute cardinal directions
-    bpy.ops.mesh.primitive_plane_add(radius=5)
+    if bpy.app.version < (2, 80, 0):
+        bpy.ops.mesh.primitive_plane_add(radius=5)
+    else:
+        bpy.ops.mesh.primitive_plane_add(size=5)
+
     plane = bpy.context.object
 
     def rand(L):
@@ -279,9 +291,14 @@ def render_scene(args,
     # them in the scene structure
     camera = bpy.data.objects['Camera']
     plane_normal = plane.data.vertices[0].normal
-    cam_behind = camera.matrix_world.to_quaternion() * Vector((0, 0, -1))
-    cam_left = camera.matrix_world.to_quaternion() * Vector((-1, 0, 0))
-    cam_up = camera.matrix_world.to_quaternion() * Vector((0, 1, 0))
+    if bpy.app.version < (2, 80, 0):
+        cam_behind = camera.matrix_world.to_quaternion() * Vector((0, 0, -1))
+        cam_left = camera.matrix_world.to_quaternion() * Vector((-1, 0, 0))
+        cam_up = camera.matrix_world.to_quaternion() * Vector((0, 1, 0))
+    else:
+        cam_behind = camera.matrix_world.to_quaternion() @ Vector((0, 0, -1))
+        cam_left = camera.matrix_world.to_quaternion() @ Vector((-1, 0, 0))
+        cam_up = camera.matrix_world.to_quaternion() @ Vector((0, 1, 0))
     plane_behind = (cam_behind - cam_behind.project(plane_normal)).normalized()
     plane_left = (cam_left - cam_left.project(plane_normal)).normalized()
     plane_up = cam_up.project(plane_normal).normalized()
@@ -309,12 +326,19 @@ def render_scene(args,
         for i in range(3):
             bpy.data.objects['Lamp_Fill'].location[i] += rand(args.fill_light_jitter)
 
-    # Now make some random objects
-    objects, blender_objects = add_random_objects(scene_struct, num_objects, args, camera)
+    # OBJECT CONCRETIZATION (either random, or nsga)
+    objects, blender_objects = add_objects_to_scene(scene_struct, num_objects, args, camera)
+
+    print("All objects added. rendering...")
 
     # Render the scene and dump the scene data structure
     scene_struct['objects'] = objects
     scene_struct['relationships'] = compute_all_relationships(scene_struct)
+
+    if args.render_from_graph == 1:
+        with open(args.graph_src_path, 'r') as f:
+            input_relationships = json.load(f)['relationships']
+        assert scene_struct['relationships'] == input_relationships
     while True:
         try:
             bpy.ops.render.render(write_still=True)
@@ -508,10 +532,12 @@ def generate_overlapping_object(scene_struct, size_mapping, object_mapping, posi
         'color_name': color_name
     }
 
-
-def add_random_objects(scene_struct, num_objects, args, camera):
+# IMPORTANT
+def add_objects_to_scene(scene_struct, num_objects, args, camera):
     """
-  Add random objects to the current blender scene
+  Add objects to the current blender scene
+  Approach 1: Randomly add objects (num)objects is random.
+  Approach 2: Add objects using NSGA to satisfy an input scene graph
   """
 
     # Load the property file
@@ -529,56 +555,96 @@ def add_random_objects(scene_struct, num_objects, args, camera):
     if args.shape_color_combos_json is not None:
         with open(args.shape_color_combos_json, 'r') as f:
             shape_color_combos = list(json.load(f).items())
-    print(scene_struct['directions'])
-    positions = []
+
+    # TODO factor out the section below
     objects = []
     blender_objects = []
-    object_combo = set()
-    last = False
-    for i in range(num_objects):
-        # if i < num_objects - 1:
-        obj_to_add = generate_random_legal_object(scene_struct, size_mapping, object_mapping, positions,
-                                                  shape_color_combos, color_name_to_rgba, material_mapping, object_combo, args)
-        # else:
-        #     obj_to_add = generate_overlapping_object(scene_struct, size_mapping, object_mapping, positions,
-        #                                              shape_color_combos, color_name_to_rgba, material_mapping, objects,
-        #                                              args)
-        if obj_to_add is None:
-            # fail to generate legal object, retry...
-            for obj in blender_objects:
-                utils.delete_object(obj)
-            return add_random_objects(scene_struct, num_objects, args, camera)
+    if args.render_from_graph == 1:
 
-        x, y, r = obj_to_add['position']
-        obj_name = obj_to_add['name']
-        theta = obj_to_add['rotation']
-        mat_name = obj_to_add['material']
-        rgba = obj_to_add['color']
+        from render_from_graph import add_objects_nsga
+        mappings = {'size':size_mapping, 'object':properties['shapes'], 'material':material_mapping, 'color':color_name_to_rgba}
+        objects_to_add = None
+        while objects_to_add == None:
+            objects_to_add = add_objects_nsga(scene_struct, mappings, shape_color_combos, args)
 
-        # Actually add the object to the scene
-        utils.add_object(args.shape_dir, obj_name, r, (x, y), theta=theta)
-        obj = bpy.context.object
-        blender_objects.append(obj)
-        positions.append((x, y, r))
+        for obj_to_add in objects_to_add:
+            x, y, r = obj_to_add['position']
+            obj_name = obj_to_add['name']
+            theta = obj_to_add['rotation']
+            mat_name = obj_to_add['material']
+            rgba = obj_to_add['color']
 
-        # Attach a random material
-        utils.add_material(mat_name, Color=rgba)
+            # Actually add the object to the scene
+            utils.add_object(args.shape_dir, obj_name, r, (x, y), theta=theta)
+            obj = bpy.context.object
+            blender_objects.append(obj)
 
-        # Record data about the object in the scene data structure
-        pixel_coords = utils.get_camera_coords(camera, obj.location)
+            # Attach a random material
+            utils.add_material(mat_name, Color=rgba)
 
-        if args.distinct_objects:
-            object_combo.add((obj_to_add['size'], obj_to_add['color_name']))
+            # Record data about the object in the scene data structure
+            pixel_coords = utils.get_camera_coords(camera, obj.location)
 
-        objects.append({
-            'shape': obj_to_add['name_out'],
-            'size': obj_to_add['size'],
-            'material': obj_to_add['material_out'],
-            '3d_coords': tuple(obj.location),
-            'rotation': theta,
-            'pixel_coords': pixel_coords,
-            'color': obj_to_add['color_name'],
-        })
+            objects.append({
+                'shape': obj_to_add['name_out'],
+                'size': obj_to_add['size'],
+                'material': obj_to_add['material_out'],
+                '3d_coords': tuple(obj.location),
+                'rotation': theta,
+                'pixel_coords': pixel_coords,
+                'color': obj_to_add['color_name'],
+            })
+
+    else:
+        positions = []
+        object_combo = set()
+        last = False
+        for i in range(num_objects):
+            # if i < num_objects - 1:
+            # IMPORTANT only creates 
+            obj_to_add = generate_random_legal_object(scene_struct, size_mapping, object_mapping, positions,
+                                                    shape_color_combos, color_name_to_rgba, material_mapping, object_combo, args)
+            # else:
+            #     obj_to_add = generate_overlapping_object(scene_struct, size_mapping, object_mapping, positions,
+            #                                              shape_color_combos, color_name_to_rgba, material_mapping, objects,
+            #                                              args)
+            if obj_to_add is None:
+                # fail to generate legal object, retry...
+                for obj in blender_objects:
+                    utils.delete_object(obj)
+                return add_objects_to_scene(scene_struct, num_objects, args, camera)
+
+            print(obj_to_add['position'])
+            x, y, r = obj_to_add['position']
+            obj_name = obj_to_add['name']
+            theta = obj_to_add['rotation']
+            mat_name = obj_to_add['material']
+            rgba = obj_to_add['color']
+
+            # Actually add the object to the scene
+            utils.add_object(args.shape_dir, obj_name, r, (x, y), theta=theta)
+            obj = bpy.context.object
+            blender_objects.append(obj)
+            positions.append((x, y, r))
+
+            # Attach a random material
+            utils.add_material(mat_name, Color=rgba)
+
+            # Record data about the object in the scene data structure
+            pixel_coords = utils.get_camera_coords(camera, obj.location)
+
+            if args.distinct_objects:
+                object_combo.add((obj_to_add['size'], obj_to_add['color_name']))
+
+            objects.append({
+                'shape': obj_to_add['name_out'],
+                'size': obj_to_add['size'],
+                'material': obj_to_add['material_out'],
+                '3d_coords': tuple(obj.location),
+                'rotation': theta,
+                'pixel_coords': pixel_coords,
+                'color': obj_to_add['color_name'],
+            })
 
     # Check that all objects are at least partially visible in the rendered image
     all_visible = check_visibility(blender_objects, args.min_pixels_per_object)
@@ -588,7 +654,7 @@ def add_random_objects(scene_struct, num_objects, args, camera):
         print('Some objects are occluded; replacing objects')
         for obj in blender_objects:
             utils.delete_object(obj)
-        return add_random_objects(scene_struct, num_objects, args, camera)
+        return add_objects_to_scene(scene_struct, num_objects, args, camera)
 
     return objects, blender_objects
 
@@ -635,9 +701,12 @@ def check_visibility(blender_objects, min_pixels_per_object):
     object_colors = render_shadeless(blender_objects, path=path)
     img = bpy.data.images.load(path)
     p = list(img.pixels)
+    # p is a list of rgba pixel values
+    # so p[0], p[1], p[2], p[3] are the rgba values for pixel 0
     color_count = Counter((p[i], p[i + 1], p[i + 2], p[i + 3])
                           for i in range(0, len(p), 4))
     os.remove(path)
+    # assuming that objects are not shaded, and background is different color, and all objects have distinct colors
     if len(color_count) != len(blender_objects) + 1:
         return False
     for _, count in color_count.most_common():
