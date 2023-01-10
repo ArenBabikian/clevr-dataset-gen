@@ -5,11 +5,11 @@ import numpy as np
 
 # from pymoo.util.termination.collection import TerminationCollection
 # from pymoo.util.termination.max_time import TimeBasedTermination
-# from pymoo.core.termination import Termination
 
 from pymoo.optimize import minimize
 from pymoo.algorithms.nsga2 import nsga2
 from pymop.problem import Problem
+from pymoo.model.termination import Termination
 
 def add_objects_nsga(scene_struct, mappings, shape_color_combos, args):
 
@@ -107,32 +107,31 @@ def add_objects_nsga(scene_struct, mappings, shape_color_combos, args):
             heu_vals = self.get_heuristics(x)
             out["F"] = heu_vals
 
-    # class OneSolutionHeuristicTermination(Termination):
+    class OneSolutionHeuristicTermination(Termination):
 
-    #     def __init__(self, heu_vals) -> None:
-    #         super().__init__()
-    #         self.heu_vals = heu_vals
+        def __init__(self, heu_vals) -> None:
+            super().__init__()
+            self.heu_vals = heu_vals
 
-    #     def _do_continue(self, algorithm):
-    #         F = algorithm.opt.get("F")
+        def _do_continue(self, algorithm):
+            F = [indiv.F for indiv in algorithm.pop]
+            valid_sols = []
+            i = 0
+            for sol in F:
+                # for each fitness result collection
+                # print(f'{i} = {tuple(sol)}')
+                i+=1
+                sol_is_valid = True
+                for heu_i in range(len(sol)):
+                    heu_v = sol[heu_i]
+                    heu_max = self.heu_vals[heu_i]
+                    if heu_v > heu_max:
+                        sol_is_valid = False
+                        break
+                if sol_is_valid:
+                    valid_sols.append(sol)
 
-    #         valid_sols = []
-    #         i = 0
-    #         for sol in F:
-    #             # for each fitness result collection
-    #             # print(f'{i} = {tuple(sol)}')
-    #             i+=1
-    #             sol_is_valid = True
-    #             for heu_i in range(len(sol)):
-    #                 heu_v = sol[heu_i]
-    #                 heu_max = self.heu_vals[heu_i]
-    #                 if heu_v > heu_max:
-    #                     sol_is_valid = False
-    #                     break
-    #             if sol_is_valid:
-    #                 valid_sols.append(sol)
-
-    #         return len(valid_sols) == 0
+            return len(valid_sols) == 0
 
     problem = MyProblem()
 
@@ -142,13 +141,14 @@ def add_objects_nsga(scene_struct, mappings, shape_color_combos, args):
     algorithm = nsga2(pop_size=20, n_offsprings=10, eliminate_duplicates=True)
 
     # TERMINATION
-    # t1 = OneSolutionHeuristicTermination(heu_vals=[0, 0])
     # t2 = TimeBasedTermination(max_time=60) # TODO change the timeout to a cmd-line param
     # termination = TerminationCollection(t1, t2)
     # TODO change termination to first optimal solution + timeout
-    termination = ('n_gen', 20)
+    # termination = ('n_gen', 200)
+    termination = OneSolutionHeuristicTermination(heu_vals=[0, 0])
 
     s = random.randint(1, 10000)
+    print('<    BEGIN nsga. ', end='')
     nsga_res = minimize(problem, algorithm, termination, save_history=False, verbose=True, seed=s)
 
     # GET OPTIMAL SOLUTION
@@ -160,11 +160,14 @@ def add_objects_nsga(scene_struct, mappings, shape_color_combos, args):
 
     # No solutions found for the given termination
     if optimal_sols == []:
+        print('No solution found, trying again>')
         return None
 
     # TODO for now, we only get the first optimal solution (only one per run)
     nsga_optimal_sol = nsga_res.X[optimal_sols[0]]
 
+    print('Solution found>')
+    print('<    END nsga>')
     # STEP 3 select color-shape combos
 
     if args.distinct_objects:

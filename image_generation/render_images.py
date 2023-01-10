@@ -540,6 +540,7 @@ def add_objects_to_scene(scene_struct, num_objects, args, camera):
   Approach 2: Add objects using NSGA to satisfy an input scene graph
   """
 
+    print('<BEGIN adding objects>')
     # Load the property file
     with open(args.properties_json, 'r') as f:
         properties = json.load(f)
@@ -564,6 +565,7 @@ def add_objects_to_scene(scene_struct, num_objects, args, camera):
         from render_from_graph import add_objects_nsga
         mappings = {'size':size_mapping, 'object':properties['shapes'], 'material':material_mapping, 'color':color_name_to_rgba}
         objects_to_add = None
+        print('<  Call nsga>')
         while objects_to_add == None:
             objects_to_add = add_objects_nsga(scene_struct, mappings, shape_color_combos, args)
 
@@ -656,6 +658,7 @@ def add_objects_to_scene(scene_struct, num_objects, args, camera):
             utils.delete_object(obj)
         return add_objects_to_scene(scene_struct, num_objects, args, camera)
 
+    print('<END adding objects>')
     return objects, blender_objects
 
 
