@@ -215,18 +215,18 @@ def find_relate_filter_options(object_idx, scene_struct, metadata,
     options[k] = v
   return options
 
-def find_all_relate_filter_options(object_idx, scene_struct, metadata):
+def find_all_relate_filter_options(metadata):
+  filter_options = {}
+  add_all_filter_option(filter_options, metadata)
   options = {}
-  if '_filter_options' not in scene_struct:
-    precompute_filter_options(scene_struct, metadata)
-  # print(scene_struct["_filter_options"])
-
-  for o, oid_set in scene_struct["_filter_options"].items():
+  for o in filter_options:
     for r in metadata["types"]['Relation']:
-      assert len(oid_set) == 1
-      oid = list(oid_set)[0]
-      if oid != object_idx:
-        options[(r, o)] = []
+      # NOTE temporarily removed
+      # assert len(oid_set) == 1
+      # oid = list(oid_set)[0]
+      # if oid != object_idx:
+      #   options[(r, o)] = []
+      options[(r, o)] = []
   return options
 
 
@@ -396,8 +396,7 @@ def instantiate_templates_dfs(scene_struct, template, metadata, answer_counts,
         include_zero = (next_node['type'] == 'relate_filter_count'
                         or next_node['type'] == 'relate_filter_exist')
         if template["category"] == "relation":
-          filter_options = find_all_relate_filter_options(answer, scene_struct, metadata,
-                              unique=unique, include_zero=include_zero)
+          filter_options = find_all_relate_filter_options(metadata)
         else:
           filter_options = find_relate_filter_options(answer, scene_struct, metadata,
                               unique=unique, include_zero=include_zero)
@@ -684,7 +683,7 @@ def main(args):
         # if "Relation" not in {p['type'] for p in template['params']}:
         num_qs = 16 # = {8 colors} * {2 sizes}
       else:
-        num_qs = num_obj * (num_obj-1) * 4 # = {num_node_pairs} * {4 edge types}
+        num_qs = num_obj * 16 * 4 # = {num_nodes} * {8 colors} * {2 sizes} * {4 edge types}
       tot_qs+=num_qs
 
       ts, qs, ans = instantiate_templates_dfs(
@@ -739,12 +738,15 @@ def main(args):
   # an empty list for those functions that do not have "side_inputs". Gross.
   for q in questions:
     for f in q['program']:
+      if 'value_inputs' in f:
+        continue
       if 'side_inputs' in f:
         f['value_inputs'] = f['side_inputs']
         del f['side_inputs']
       else:
         f['value_inputs'] = []
 
+  # For debugging
   # questions = [(q['question'], q['answer']) for q in questions]
   # questions = [q['question'] for q in questions]
 
@@ -754,7 +756,7 @@ def main(args):
     json.dump({
         'info': scene_info,
         'questions': questions,
-      }, f, indent=2)
+      }, f)
 
 
 if __name__ == '__main__':
