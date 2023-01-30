@@ -181,8 +181,12 @@ def main(args):
     if args.save_blendfiles == 1 and not os.path.isdir(args.output_blend_dir):
         os.makedirs(args.output_blend_dir)
 
+
+    #TODO handle directory as input path for graphs
+
     all_scene_paths = []
     for i in tqdm(range(args.num_images)):
+        #TODO adjust paths to include input graph path 
         img_path = img_template % (i + args.start_idx)
         scene_path = scene_template % (i + args.start_idx)
         all_scene_paths.append(scene_path)

@@ -683,6 +683,7 @@ def main(args):
         # if "Relation" not in {p['type'] for p in template['params']}:
         num_qs = 16 # = {8 colors} * {2 sizes}
       else:
+        # TODO change this to num_obj*(num_obj-1)*4 edge types
         num_qs = num_obj * 16 * 4 # = {num_nodes} * {8 colors} * {2 sizes} * {4 edge types}
       tot_qs+=num_qs
 

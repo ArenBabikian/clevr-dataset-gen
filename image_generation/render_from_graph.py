@@ -171,6 +171,9 @@ def add_objects_nsga(scene_struct, mappings, shape_color_combos, args):
     # STEP 3 select color-shape combos
 
     if args.distinct_objects:
+        # TODO should be size-color combo, and not shape-color
+        # the difficulty is that size affects NSGA.
+        # So we need to make this "distinct" selection before NSGA
         all_shp_col_combos = []
         for shape_name in mappings['object']:
             for color_name in mappings['color']:
